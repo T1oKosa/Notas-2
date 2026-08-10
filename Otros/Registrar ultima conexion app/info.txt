@@ -1,0 +1,73 @@
+Paso 2 — Agregarlo al panel
+
+Usa el diseñador de paneles clásico (el moderno no siempre expone el componente de recurso web):
+
+Solución → Paneles → abre tu panel principal → Editar
+En la cinta, botón Recurso web
+Selecciona cb_selloacceso.html
+Etiqueta: Bienvenida (o desmarca Mostrar etiqueta si lo quieres más limpio)
+Desmarca Mostrar bordes
+Guardar → Publicar
+
+Si lo quieres discreto, ponlo en un mosaico de 1 columna en la esquina superior.
+
+Ahora, tres cosas importantes sobre tu lógica
+1. El "día" no es el mismo en UTC que en Chile 🇨🇱
+
+Esto te va a morder si no lo cuidas. Si calculas "hoy" con utcNow() o toISOString().slice(0,10), un usuario que entra a las 21:00 de Santiago ya está en el día siguiente en UTC. Resultado: sellos duplicados en un mismo día laboral, y días que se ven vacíos.
+
+Por eso en el código de arriba uso getFullYear/getMonth/getDate (que dan la fecha local del navegador) y guardo el resultado en una columna dedicada cb_diaacceso.
+
+Esa columna debe ser:
+
+Tipo: Fecha únicamente (Date Only)
+Comportamiento: Independiente de zona horaria
+
+Así almacena 2026-08-10 como un valor literal, sin que Dataverse lo reinterprete. Es el único campo confiable para comparar "¿es el mismo día?".
+
+2. El guard de localStorage es una optimización, no la autoridad
+
+Lo puse para evitar la llamada a la Web API en la mayoría de las cargas, pero no confíes en él como control:
+
+Se pierde en modo privado o al limpiar caché
+Es por dispositivo: el mismo usuario en PC y en móvil tiene dos localStorage distintos
+En la app móvil el comportamiento del storage puede variar
+
+Por eso la comparación real (esNuevoDia) se hace contra el dato de Dataverse, no contra el storage. El storage solo evita trabajo redundante.
+
+3. ¿De verdad necesitas la lógica de "primera vez del día"?
+
+Aquí te hago la pregunta de arquitecto, porque cambia bastante el diseño:
+
+Si tu objetivo es...	Lo que necesitas
+"¿Cuándo se conectó por última vez?" (licencias, inactividad)	Un simple upsert de una fila por usuario. No necesitas lógica de día en absoluto. Sobrescribes cb_lastlogin cada vez y listo. Es idempotente, más simple, imposible de romper
+"¿Cuántos días al mes usa el sistema?" (adopción, engagement)	Ahí sí: una fila por usuario+día en una tabla de sesiones, y la lógica de "primera del día" tiene sentido
+
+Por lo que me has descrito desde el inicio (consultar la fecha de última conexión desde un flow), el primer caso es el tuyo. La lógica de "primera vez del día" te está agregando complejidad — y un bug potencial de zona horaria — sin darte nada a cambio.
+
+Mi sugerencia: empieza sin ella. Solo actualiza cb_lastlogin en cada carga del panel. Si más adelante necesitas el histórico de adopción, agregas una segunda tabla cb_sesionacceso con una fila por día. Diseño incremental, no adivinando requisitos futuros.
+
+El único argumento a favor del control diario es reducir escrituras (una por día en vez de una por cada vez que el usuario vuelve al panel). Y eso sí es válido: en una org con 200 usuarios que navegan al panel 10 veces al día, son 2.000 escrituras diarias contra 200. Si ese es tu motivo, mantenlo — pero con la columna Fecha únicamente bien configurada.
+
+El agujero de cobertura que debes cerrar
+
+Tu supuesto es "al abrir la app se entra directo a los paneles". Ojo con esto: las apps model-driven suelen restaurar la última página visitada. Si un usuario cerró la sesión estando en un formulario de Cuenta, al volver puede aterrizar ahí y nunca pasar por el panel.
+
+Mitigaciones, de menor a mayor esfuerzo:
+
+Poner el recurso web en todos los paneles de la app, no solo el principal. Barato y cubre bastante.
+Registrar además el handler en el OnLoad de los formularios de las 2-3 tablas más usadas, apuntando a una biblioteca JS compartida con la misma lógica. Con eso la cobertura es prácticamente total.
+Mantener la auditoría nativa activada de fondo como red de seguridad. Si un usuario no aparece en tu tabla pero sí en audit, sabes que hubo un acceso que tu instrumentación no capturó — y puedes reconciliarlo con el flow nocturno.
+
+Yo haría las tres. La 3 es gratis y te da la validación de que tu instrumentación funciona.
+
+Veredicto sobre tu idea
+
+Es viable y bien pensada, con dos correcciones:
+
+No es JavaScript "en el panel" sino JavaScript dentro de un recurso web HTML puesto en el panel
+Cuidado con la zona horaria si mantienes la lógica de día
+
+Y una recomendación de diseño: empieza sin la lógica de "primera vez del día", salvo que el ahorro de escrituras sea tu motivación real.
+
+¿Quieres que te deje el HTML en la versión simple (upsert directo, sin lógica de día) para que compares, o prefieres la definición completa de las columnas de la tabla con los tipos y comportamientos exactos?

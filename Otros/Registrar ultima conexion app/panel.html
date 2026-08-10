@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 12px;
+               background: transparent; color: #323130; font-size: 13px; }
+        #saludo { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+        #ultimo { color: #605e5c; }
+    </style>
+</head>
+<body>
+    <div id="saludo">Cargando...</div>
+    <div id="ultimo"></div>
+
+<script type="text/javascript">
+(function () {
+    "use strict";
+
+    // El recurso web vive en un iframe: Xrm está en el padre
+    var Xrm = window.parent.Xrm;
+    if (!Xrm) { return; }
+
+    var ctx      = Xrm.Utility.getGlobalContext();
+    var userId   = ctx.userSettings.userId.replace(/[{}]/g, "");
+    var userName = ctx.userSettings.userName;
+    var canal    = ctx.client.getClient();          // "Web" | "Mobile" | "Outlook"
+    var formato  = ctx.client.getFormFactor();      // 1 Escritorio, 2 Tableta, 3 Teléfono
+
+    // --- Fecha LOCAL del usuario, no UTC (ver nota más abajo) ---
+    var ahora = new Date();
+    var hoyLocal = ahora.getFullYear() + "-" +
+                   ("0" + (ahora.getMonth() + 1)).slice(-2) + "-" +
+                   ("0" + ahora.getDate()).slice(-2);
+
+    var etiquetaCanal = canal + " - " +
+        (formato === 3 ? "Teléfono" : formato === 2 ? "Tableta" : "Escritorio");
+
+    document.getElementById("saludo").innerText = "Hola, " + ctx.userSettings.userName;
+
+    // --- Corto circuito: ya sellamos hoy en este dispositivo ---
+    var yaSellado = false;
+    try {
+        yaSellado = (localStorage.getItem("cb_selloAcceso") === hoyLocal);
+    } catch (e) { /* modo privado / storage bloqueado */ }
+
+    Xrm.WebApi.retrieveMultipleRecords(
+        "cb_registroacceso",
+        "?$select=cb_registroaccesoid,cb_lastlogin,cb_logincount,cb_diaacceso" +
+        "&$filter=_cb_user_value eq " + userId +
+        "&$top=1"
+    ).then(function (res) {
+
+        var esNuevoDia = true;
+        var reg = null;
+
+        if (res.entities.length > 0) {
+            reg = res.entities[0];
+            esNuevoDia = (reg.cb_diaacceso !== hoyLocal);
+            pintarUltimo(reg.cb_lastlogin);
+        } else {
+            pintarUltimo(null);
+        }
+
+        if (yaSellado && !esNuevoDia) { return; }   // nada que hacer
+
+        var datos = {
+            "cb_lastlogin":  ahora.toISOString(),
+            "cb_diaacceso":  hoyLocal,
+            "cb_canal":      etiquetaCanal,
+            "cb_appname":    ctx.getCurrentAppName()
+        };
+
+        if (reg) {
+            if (esNuevoDia) {
+                datos["cb_logincount"] = (reg.cb_logincount || 0) + 1;   // cuenta DÍAS activos
+            }
+            Xrm.WebApi.updateRecord("cb_registroacceso", reg.cb_registroaccesoid, datos)
+               .then(marcarLocal, logError);
+        } else {
+            datos["cb_userkey"] = userName;
+            datos["cb_user@odata.bind"] = "/systemusers(" + userId + ")";
+            datos["cb_firstlogin"] = ahora.toISOString();
+            datos["cb_logincount"] = 1;
+            Xrm.WebApi.createRecord("cb_registroacceso", datos)
+               .then(marcarLocal, logError);
+        }
+
+    }, logError);
+
+    function marcarLocal() {
+        try { localStorage.setItem("cb_selloAcceso", hoyLocal); } catch (e) {}
+    }
+
+    function pintarUltimo(fecha) {
+        document.getElementById("ultimo").innerText = fecha
+            ? "Último acceso: " + new Date(fecha).toLocaleString()
+            : "¡Bienvenido por primera vez!";
+    }
+
+    function logError(err) {
+        console.log("Sello de acceso: " + (err && err.message));
+        // Silencioso a propósito: esto NUNCA debe molestar al usuario
+    }
+})();
+</script>
+</body>
+</html>
